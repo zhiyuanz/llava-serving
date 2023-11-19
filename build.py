@@ -1,8 +1,10 @@
 import os
-import torch
-import tensorrt as trt
-from transformers import CLIPVisionModel
 from time import time
+
+import tensorrt as trt
+import torch
+import tensorrt_llm
+from transformers import CLIPVisionModel
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -62,13 +64,11 @@ def build_vision_tower():
 
 # 2. Build mm projector engine
 from huggingface_hub import hf_hub_download
-from tensorrt_llm.module import Module
+from tensorrt_llm import Builder, net_guard
+from tensorrt_llm.functional import Tensor, gelu
 from tensorrt_llm.layers import Linear
-from tensorrt_llm.functional import gelu
-from tensorrt_llm import net_guard
-from tensorrt_llm.functional import Tensor
-from tensorrt_llm import Builder
-import tensorrt_llm
+from tensorrt_llm.module import Module
+
 
 def build_mm_projector():
     hf_hub_download("liuhaotian/llava-v1.5-7b", "mm_projector.bin", local_dir="./")
@@ -123,3 +123,35 @@ def build_mm_projector():
         f.write(engine)
 
 # 3. Build llama engine
+from llava.mm_utils import get_model_name_from_path
+from llava.model import *
+from llava.model.builder import load_pretrained_model
+from llava.utils import disable_torch_init
+from tensorrt_llm.examples.llama.weight import load_from_hf_llama
+from tensorrt_llm.layers.attention import PositionEmbeddingType
+from tensorrt_llm.quantization import QuantMode
+
+disable_torch_init() # Disable the redundant torch default initialization to accelerate model creation.
+model_path = "liuhaotian/llava-v1.5-7b"
+model_name = get_model_name_from_path(model_path)
+tokenizer, model, image_processor, context_len = load_pretrained_model(
+    model_path, None, model_name, device="cpu")
+llama_config = model.config
+tensorrt_llm_llama = tensorrt_llm.models.LLaMAForCausalLM(
+        num_layers=llama_config.num_hidden_layers,
+        num_heads=llama_config.num_attention_heads,
+        num_kv_heads=llama_config.num_key_value_heads,
+        hidden_size=llama_config.hidden_size,
+        vocab_size=llama_config.vocab_size,
+        hidden_act=llama_config.hidden_act,
+        max_position_embeddings=llama_config.max_position_embeddings,
+        dtype='float16',
+        mlp_hidden_size=llama_config.intermediate_size,
+        position_embedding_type=PositionEmbeddingType.rope_gpt_neox,
+        rotary_base=10000.0,
+        rotary_scaling=None,
+        use_parallel_embedding=False,
+        embedding_sharding_dim=1,
+        quant_mode=QuantMode(0),
+        rms_norm_eps=llama_config.rms_norm_eps)
+load_from_hf_llama(tensorrt_llm_llama, model, dtype='float16')
