@@ -1,0 +1,5 @@
+name: "llava_py"
+backend: "python"
+max_batch_size: 256
+
+instance_group [{ kind: KIND_GPU }]
