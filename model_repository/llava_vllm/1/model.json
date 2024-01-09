@@ -1,0 +1,5 @@
+{
+    "model":"llava-hf/llava-1.5-7b-hf",
+    "disable_log_requests": "true",
+    "gpu_memory_utilization": 0.95
+}
