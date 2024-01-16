@@ -12,7 +12,7 @@ class TritonPythonModel:
     @staticmethod
     def auto_complete_config(auto_complete_model_config):
         inputs = [
-            {"name": "prompt", "data_type": "TYPE_STRING", "dims": [1]},
+            {"name": "text_input", "data_type": "TYPE_STRING", "dims": [1]},
             {"name": "image",  "data_type": "TYPE_UINT8",  "dims": [-1], "optional": True},
         ]
 
@@ -33,7 +33,7 @@ class TritonPythonModel:
         prompts = []
         images = []
         for request in requests:
-            prompt = pb_utils.get_input_tensor_by_name(request, "prompt").as_numpy()[0]
+            prompt = pb_utils.get_input_tensor_by_name(request, "text_input").as_numpy()[0]
             prompt = [p.decode("utf-8") for p in prompt]
             prompts += prompt
             image_data = pb_utils.get_input_tensor_by_name(request, "image")
