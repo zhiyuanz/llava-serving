@@ -40,7 +40,7 @@ class TritonPythonModel:
 
     def initialize(self, args):
         self.processor = AutoProcessor.from_pretrained("llava-hf/llava-1.5-7b-hf")
-        vit_path = "/code/model_repository/preprocessing/visual_encoder_fp16.engine"
+        vit_path = "/code/model_repository/llava_trt_vision/visual_encoder_fp16.engine"
         with open(vit_path, 'rb') as f:
             engine_buffer = f.read()
         self.vit_session = Session.from_serialized_engine(engine_buffer)
