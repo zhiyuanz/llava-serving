@@ -1,0 +1,9 @@
+name: "llava_trt_vision"
+backend: "python"
+max_batch_size: 32
+
+instance_group [
+    {
+        kind: KIND_MODEL
+    }
+]
