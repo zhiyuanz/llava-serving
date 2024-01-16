@@ -5,12 +5,13 @@ import asyncio
 import io
 import json
 import sys
+import time
 
 import numpy as np
 import tritonclient.grpc.aio as grpcclient
 from tritonclient.utils import *
 import requests
-
+from transformers import AutoTokenizer
 
 class LLMClient:
     def __init__(self, flags: argparse.Namespace):
@@ -20,6 +21,7 @@ class LLMClient:
         self._flags = flags
         self._loop = asyncio.get_event_loop()
         self._results_dict = {}
+        self._throughput = []
 
     async def async_request_iterator(self, prompts, sampling_parameters):
         try:
@@ -39,6 +41,7 @@ class LLMClient:
     async def stream_infer(self, prompts, sampling_parameters):
         try:
             # Start streaming
+            start_time = time.time()
             response_iterator = self._client.stream_infer(
                 inputs_iterator=self.async_request_iterator(
                     prompts, sampling_parameters
@@ -46,7 +49,7 @@ class LLMClient:
                 stream_timeout=self._flags.stream_timeout,
             )
             async for response in response_iterator:
-                yield response
+                yield (response, start_time)
         except InferenceServerException as error:
             print(error)
             sys.exit(1)
@@ -57,13 +60,16 @@ class LLMClient:
 
         # Read response from the stream
         async for response in self.stream_infer(prompts, sampling_parameters):
-            result, error = response
+            result, error = response[0]
+            start_time = response[1]
             if error:
                 print(f"Encountered error while processing: {error}")
             else:
                 output = result.as_numpy("text_output")
+                time_elapsed = time.time() - start_time
                 for i in output:
                     self._results_dict[result.get_response().id].append(i)
+                    self._throughput.append((len(i), time_elapsed))
 
     async def run(self):
         sampling_parameters = {"temperature": "0.1", "top_p": "0.95"}
@@ -71,7 +77,16 @@ class LLMClient:
             print(f"Loading inputs from `{self._flags.input_prompts}`...")
             prompts = file.readlines()
 
+        start_time = time.time()
         await self.process_stream(prompts, sampling_parameters)
+        print(f"Total time taken: {time.time() - start_time} seconds")
+        tokenizer = AutoTokenizer.from_pretrained("liuhaotian/llava-v1.5-7b")
+        num_tokens = 0
+        for id in self._results_dict.keys():
+            for result in self._results_dict[id]:
+                result = result.decode('utf-8')[len(prompts[int(id) % len(prompts)]):]
+                num_tokens += len(tokenizer.encode(result))
+        print("Total tokens generated:", num_tokens)
 
         with open(self._flags.results_file, "w") as file:
             for id in self._results_dict.keys():
@@ -86,8 +101,6 @@ class LLMClient:
                 print(f"\nContents of `{self._flags.results_file}` ===>")
                 print(file.read())
 
-        print("PASS: vLLM example")
-
     def run_async(self):
         self._loop.run_until_complete(self.run())
 
@@ -100,10 +113,13 @@ class LLMClient:
         send_parameters_as_tensor=True,
     ):
         inputs = []
+        need_batch_dim = not self._flags.model.endswith("vllm")
+
         try:
-            inputs.append(grpcclient.InferInput("prompt", [1, 1], "BYTES"))
+            inputs.append(grpcclient.InferInput("text_input", [1, 1] if need_batch_dim else [1], "BYTES"))
             prompt_data = np.array([prompt.encode("utf-8")], dtype=np.object_)
-            prompt_data = np.expand_dims(prompt_data, axis=0)
+            if need_batch_dim:
+                prompt_data = np.expand_dims(prompt_data, axis=0)
             inputs[-1].set_data_from_numpy(prompt_data)
         except Exception as error:
             print(f"Encountered an error during request creation: {error}")
@@ -112,7 +128,8 @@ class LLMClient:
         try:
             response = requests.get('https://www.ilankelman.org/stopsigns/australia.jpg')
             image = np.frombuffer(io.BytesIO(response.content).read(), dtype=np.uint8)  
-            image = np.expand_dims(image, axis=0)
+            if need_batch_dim:
+                image = np.expand_dims(image, axis=0)
             inputs.append(grpcclient.InferInput("image", image.shape, "UINT8"))
             inputs[-1].set_data_from_numpy(image)
         except Exception as error:
@@ -133,6 +150,7 @@ class LLMClient:
                 )
                 inputs.append(grpcclient.InferInput("sampling_parameters", [1], "BYTES"))
                 inputs[-1].set_data_from_numpy(sampling_parameters_data)
+
 
         # Add requested outputs
         outputs = []
